@@ -95,12 +95,8 @@ export default function App() {
     const elapsed = startRef.current ? (Date.now()-startRef.current)/1000 : 999;
     const isWin = res === "win";
 
-    setResult(res);
-    setScreen("over");
-    track("game_over", { result: res, model: model.name, tier: model.tier, moves: finalMoves, score: bd.total });
-    setGames(g=>g+1);
-
-    let bd = { base:0,speed:0,eff:0,strk:0,total:0 };
+    // ── FIX 1: calculate bd BEFORE using it anywhere ──
+    let bd = { base:0, speed:0, eff:0, strk:0, total:0 };
     if (isWin) {
       bd = calcScore({ model, moves:finalMoves, seconds:elapsed, streak });
       setBreakdown(bd);
@@ -110,34 +106,55 @@ export default function App() {
       setBreakdown(null);
     }
 
-    // Update profile in one atomic operation
-    setProfile(prev => {
-      const updated = recordGame(prev, {
-        modelId:   model.id,
-        modelName: model.name,
-        result:    res,
-        score:     bd.total,
-        moves:     finalMoves,
-        seconds:   Math.round(elapsed),
-      });
-      // Update local leaderboard
-      const lvInfo = getLevel(updated.xp);
-      setLb(lb => {
-        const you = { name: updated.username, pts: updated.totalScore, wins: updated.totalWins,
-          lvl: lvInfo.cur.lvl, apex: updated.defeatedApex || model.tierNum===6, streak: updated.currentStreak };
-        return [...lb.filter(e=>e.name!==updated.username), you].sort((a,b)=>b.pts-a.pts).slice(0,8);
-      });
-      return updated;
+    setResult(res);
+    setScreen("over");
+    // FIX 1: bd.total is now defined
+    track("game_over", { result: res, model: model.name, tier: model.tier, moves: finalMoves, score: bd.total });
+    setGames(g=>g+1);
+
+    // ── FIX 2: build updated profile synchronously so we can pass it to Supabase ──
+    const updatedProfile = recordGame(profile, {
+      modelId:   model.id,
+      modelName: model.name,
+      result:    res,
+      score:     bd.total,
+      moves:     finalMoves,
+      seconds:   Math.round(elapsed),
     });
 
-    // Check achievements with updated state
+    // Apply updated profile to state
+    setProfile(() => {
+      const lvInfo = getLevel(updatedProfile.xp);
+      setLb(lb => {
+        const you = {
+          name: updatedProfile.username,
+          pts:  updatedProfile.totalScore,
+          wins: updatedProfile.totalWins,
+          lvl:  lvInfo.cur.lvl,
+          apex: updatedProfile.defeatedApex || model.tierNum===6,
+          streak: updatedProfile.currentStreak,
+        };
+        return [...lb.filter(e=>e.name!==updatedProfile.username), you]
+          .sort((a,b)=>b.pts-a.pts).slice(0,8);
+      });
+      return updatedProfile;
+    });
+
+    // Check achievements
     const newStreak = isWin ? streak+1 : 0;
     const newLoss   = isWin ? 0 : lossRun+1;
     checkAchs({ wins: isWin?wins+1:wins, games:games+1, streak:newStreak, lossRun:newLoss,
       lastWin:isWin, lastSec:elapsed, lastMoves:finalMoves, lastTier:model.tierNum, usedBYOK });
 
-    // Async: sync to Neon (never blocks)
-    syncToNeon(profile, { result:res, score:bd.total, modelId:model.id, modelName:model.name });
+    // ── FIX 2: pass updatedProfile (not stale profile) to Supabase sync ──
+    syncToNeon(updatedProfile, {
+      result:    res,
+      score:     bd.total,
+      modelId:   model.id,
+      modelName: model.name,
+      moves:     finalMoves,
+      seconds:   Math.round(elapsed),
+    });
 
     setAiLoading(true);
     aiChat({ type:"analysis", modelId:model.id, data:{ result:res, moves:finalMoves }, userKey: userKey||null })

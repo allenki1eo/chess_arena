@@ -109,30 +109,54 @@ export function recordGame(profile, { modelId, modelName, result, score, moves, 
 }
 
 // ─── Neon sync (async, never blocks game) ─────────────────────────────────────
-export async function syncToNeon(profile, gameData) {
+export async function syncToSupabase(profile, gameData) {
   try {
+    const payload = {
+      username:     profile.username,
+      score:        gameData.score     || 0,
+      won:          gameData.result === "win",
+      modelId:      gameData.modelId   || "",
+      modelName:    gameData.modelName || "",
+      streak:       profile.currentStreak || 0,   // FIX: use currentStreak not bestStreak
+      level:        getProfileLevel(profile),
+      defeatedApex: profile.defeatedApex || false,
+      moves:        gameData.moves   || 0,
+      seconds:      gameData.seconds || 0,         // FIX: was "duration", API expects "seconds"
+    };
+
     const res = await fetch("/api/leaderboard-save", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        username:     profile.username,
-        score:        gameData.score,
-        won:          gameData.result === "win",
-        modelId:      gameData.modelId,
-        modelName:    gameData.modelName,
-        streak:       profile.bestStreak,
-        level:        profile.level,
-        defeatedApex: profile.defeatedApex,
-        moves:        gameData.moves || 0,
-        duration:     gameData.seconds || 0,
-      }),
+      body: JSON.stringify(payload),
     });
+
+    if (!res.ok) {
+      console.warn("Supabase sync failed:", res.status);
+      return false;
+    }
+
     const json = await res.json();
+    if (json.saved === false) {
+      console.warn("Supabase sync:", json.reason || json.error || "unknown");
+    }
     return json.saved === true;
-  } catch {
-    return false; // silently fail
+  } catch (err) {
+    console.warn("Supabase sync error:", err.message);
+    return false;
   }
 }
+
+// Helper — derive numeric level from XP
+function getProfileLevel(profile) {
+  const LEVELS = [0, 500, 1500, 3500, 7000, 15000, 30000, 60000];
+  const xp = profile.xp || 0;
+  let lvl = 1;
+  for (let i = 0; i < LEVELS.length; i++) { if (xp >= LEVELS[i]) lvl = i + 1; }
+  return lvl;
+}
+
+// Keep old name as alias for backwards compat
+export const syncToNeon = syncToSupabase;
 
 export async function fetchGlobalLeaderboard() {
   try {
