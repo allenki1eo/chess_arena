@@ -275,8 +275,8 @@ export default function App() {
       {popups.map(p=><Popup key={p.id} text={p.text} color={p.color}/>)}
       {newAchs.map(a=><AchToast key={a.id} ach={a}/>)}
 
-      {/* Profile button — always visible except onboard */}
-      {screen !== "onboard" && (
+      {/* Profile button — hidden during game to avoid overlapping resign button */}
+      {screen !== "onboard" && screen !== "game" && screen !== "over" && screen !== "battle-intro" && (
         <button className="profile-btn" onClick={()=>setShowProfile(true)}
           title={`${profile.username} · ${getLevel(xp).cur.name}`}>
           <span className="pb-avatar" style={{background:`${getLevel(xp).cur.color}33`,color:getLevel(xp).cur.color}}>
@@ -537,7 +537,8 @@ function GameScreen({model:m,speech,speechKey,aiLoading,chess,fen,shake,FILES,RA
           {screen==="game" && (
             <div style={{display:"flex",gap:8,alignItems:"center"}}>
               <span className="move-badge">Move {Math.ceil(moveCount/2)}</span>
-              <button className="btn-resign" onClick={onResign}>Resign</button>
+              {/* Resign shown inline on desktop, hidden on mobile (see bottombar) */}
+              <button className="btn-resign btn-resign-top" onClick={onResign}>Resign</button>
             </div>
           )}
           {screen==="over" && (
@@ -584,13 +585,17 @@ function GameScreen({model:m,speech,speechKey,aiLoading,chess,fen,shake,FILES,RA
               <div style={{fontSize:"0.62rem",color:lvl.cur.color}}>{lvl.cur.name}</div>
             </div>
           </div>
-          <div className="xp-bar" style={{width:160}}>
+          <div className="xp-bar" style={{width:120}}>
             <div className="xp-fill" style={{width:`${lvl.pct}%`,background:lvl.cur.color}}/>
           </div>
           <div style={{fontFamily:"var(--fmono)",fontSize:"0.7rem",color:"var(--gold)"}}>
             {totalPts.toLocaleString()} pts
           </div>
           {streak>0&&<div className="streak-badge">🔥 {streak}</div>}
+          {/* Resign button here on mobile — away from the profile button area */}
+          {screen==="game" && (
+            <button className="btn-resign btn-resign-mobile" onClick={onResign}>Resign</button>
+          )}
         </div>
 
         {/* Move log */}
@@ -1143,6 +1148,9 @@ a{color:inherit}
 .btn-resign{font-family:var(--fraj);font-weight:700;font-size:.65rem;letter-spacing:.08em;padding:7px 14px;
   background:transparent;border:1px solid rgba(239,68,68,.25);color:rgba(239,68,68,.7);border-radius:4px;cursor:pointer;transition:all .2s}
 .btn-resign:hover{background:rgba(239,68,68,.1);color:#ef4444}
+/* Desktop: show in topbar, hide in bottombar */
+.btn-resign-top{display:inline-flex}
+.btn-resign-mobile{display:none}
 
 /* BOARD */
 .board-wrap{display:flex;gap:5px;align-items:flex-start}
@@ -1295,12 +1303,16 @@ a{color:inherit}
   /* Game screen */
   .g-main{padding:8px 12px;gap:8px}
   .g-topbar{max-width:100%;padding:8px 10px;border-radius:6px}
+  /* Profile button is hidden during game — no need for padding-right workaround */
   .g-topbar .g-opp div{display:none}
   .g-bottombar{max-width:100%;padding:8px 10px}
   .movelog{max-width:100%;max-height:52px;padding:6px 10px}
   .status-thinking,.status-idle,.status-check{font-size:.62rem}
   .move-badge{font-size:.58rem;padding:4px 7px}
   .btn-resign{font-size:.58rem;padding:6px 10px}
+  /* On mobile: hide topbar resign (near profile btn), show bottombar resign */
+  .btn-resign-top{display:none}
+  .btn-resign-mobile{display:inline-flex;margin-left:auto;flex-shrink:0}
 
   /* Board: fills screen width */
   .board-wrap{gap:3px}
