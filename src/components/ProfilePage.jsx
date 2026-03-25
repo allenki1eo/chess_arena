@@ -113,15 +113,30 @@ export default function ProfilePage({ profile, onClose, onRename, unlocked }) {
               {/* Level progress */}
               <div className="pm-section-title">Level Progress</div>
               <div className="level-ladder">
-                {PLAYER_LEVELS.map(l=>{
+                {PLAYER_LEVELS.map((l,i)=>{
                   const done = (profile.xp||0) >= l.xp;
                   const isCur = l.lvl === lvl.cur.lvl;
+                  const nextLvl = PLAYER_LEVELS[i+1];
+                  const pct = isCur && nextLvl
+                    ? Math.min(100, (((profile.xp||0) - l.xp) / (nextLvl.xp - l.xp)) * 100)
+                    : done ? 100 : 0;
                   return (
                     <div key={l.lvl} className={`ll-step ${done?"ll-done":""} ${isCur?"ll-cur":""}`}
-                      style={isCur?{borderColor:l.color,background:`${l.color}15`,color:l.color}:{}}>
-                      <span className="ll-n">{l.lvl}</span>
-                      <span className="ll-name">{l.name}</span>
-                      {done&&<span className="ll-check">✓</span>}
+                      style={{"--lc": l.color}}>
+                      <div className="ll-badge" style={{background: done||isCur ? l.color : "var(--bg4)", color: done||isCur ? "#08090f" : "var(--t3)"}}>
+                        {done && !isCur ? "✓" : l.lvl}
+                      </div>
+                      <div className="ll-info">
+                        <div className="ll-name" style={isCur?{color:l.color}:{}}>{l.name}</div>
+                        {isCur && (
+                          <div className="ll-bar">
+                            <div className="ll-bar-fill" style={{width:`${pct}%`, background:l.color}}/>
+                          </div>
+                        )}
+                        {!isCur && !done && (
+                          <div className="ll-xp-need">{(l.xp-(profile.xp||0)).toLocaleString()} XP</div>
+                        )}
+                      </div>
                     </div>
                   );
                 })}
@@ -381,14 +396,26 @@ const PROFILE_CSS = `
 .sc-val{font-family:var(--fdis);font-size:1.2rem;color:var(--t1);line-height:1;margin-bottom:4px}
 .sc-label{font-family:var(--fmono);font-size:.58rem;color:var(--t3);letter-spacing:.1em;text-transform:uppercase}
 
-.level-ladder{display:flex;flex-wrap:wrap;gap:6px}
-.ll-step{display:flex;align-items:center;gap:7px;padding:7px 12px;background:var(--bg2);
-  border:1px solid rgba(255,255,255,.06);border-radius:5px;font-size:.75rem;color:var(--t3);opacity:.4}
-.ll-done{opacity:.7}
-.ll-cur{opacity:1;font-weight:700}
-.ll-n{font-family:var(--fdis);font-size:.7rem;width:16px;text-align:center}
-.ll-name{font-family:var(--fraj);font-weight:600}
-.ll-check{color:var(--green);font-size:.8rem}
+.level-ladder{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.ll-step{display:flex;align-items:center;gap:10px;padding:10px 12px;
+  background:var(--bg2);border:1px solid rgba(255,255,255,.06);
+  border-radius:8px;transition:all .2s;opacity:.35;position:relative;overflow:hidden}
+.ll-step::before{content:"";position:absolute;inset:0;
+  background:linear-gradient(135deg,var(--lc,transparent),transparent);opacity:0;transition:.3s}
+.ll-done{opacity:.65}
+.ll-done::before{opacity:.06}
+.ll-cur{opacity:1;border-color:var(--lc,rgba(255,255,255,.2));box-shadow:0 0 0 1px var(--lc,transparent),inset 0 0 20px rgba(255,255,255,.03)}
+.ll-cur::before{opacity:.1}
+.ll-badge{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;
+  justify-content:center;font-family:var(--fdis);font-size:.72rem;font-weight:700;flex-shrink:0;transition:.2s}
+.ll-info{flex:1;min-width:0}
+.ll-name{font-family:var(--fraj);font-weight:700;font-size:.75rem;color:var(--t2);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:3px}
+.ll-bar{height:3px;background:var(--bg4);border-radius:2px;overflow:hidden}
+.ll-bar-fill{height:100%;border-radius:2px;transition:width .8s var(--ease)}
+.ll-xp-need{font-family:var(--fmono);font-size:.58rem;color:var(--t3)}
+@media(max-width:600px){.level-ladder{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:380px){.level-ladder{grid-template-columns:1fr}}
 
 /* VS MODELS */
 .pm-models{display:flex;flex-direction:column;gap:8px}

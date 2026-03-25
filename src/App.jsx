@@ -190,11 +190,20 @@ export default function App() {
             .then(t=>{ if(t) say(t); setAiLoading(false); });
         }
 
-        /* Chess Engine */
+        /* Chess Engine — delay so player sees their move land first */
         tRef.current = true; setThinking(true);
         try {
+          // Thinking delay: scales with villain tier (300ms Recruit → 1200ms Apex)
+          // Gives player time to see where their piece landed before AI responds
+          const thinkDelay = 300 + (model.tierNum || 1) * 100;
+          await new Promise(r => setTimeout(r, thinkDelay));
+
           const aim = await getBestMove(newFen, model.depth, model.skill, chess);
           if (!aim) return;
+
+          // Brief pause after calculation — shows "thinking" state clearly
+          await new Promise(r => setTimeout(r, 200));
+
           try { chess.move(aim); } catch { chess.move({...aim,promotion:"q"}); }
           const n2 = newCount+1;
           moveRef.current = n2;
@@ -1158,7 +1167,18 @@ a{color:inherit}
 .piece{font-size:2.5rem;line-height:1;user-select:none;pointer-events:none;z-index:2;position:relative;
   filter:drop-shadow(0 2px 4px rgba(0,0,0,.8));transition:transform .1s}
 .sq:hover .piece,.sq-sel .piece{transform:scale(1.08)}
-.pb{filter:drop-shadow(0 2px 5px rgba(0,0,0,.95)) drop-shadow(0 0 2px rgba(0,0,0,.9))}
+.pb{
+  color:#1a1a2e;
+  -webkit-text-stroke:1.5px rgba(255,255,255,.15);
+  filter:drop-shadow(0 2px 6px rgba(0,0,0,1)) drop-shadow(0 0 3px rgba(0,0,0,.9));
+  text-shadow:none;
+}
+/* White pieces get a clean bright look */
+.piece:not(.pb){
+  color:#f0e6d0;
+  -webkit-text-stroke:1px rgba(0,0,0,.6);
+  filter:drop-shadow(0 2px 5px rgba(0,0,0,.8));
+}
 .dot{position:absolute;width:20px;height:20px;border-radius:50%;background:rgba(0,0,0,.24);pointer-events:none;z-index:1}
 .ring{position:absolute;inset:5px;border-radius:50%;border:4px solid rgba(239,68,68,.4);pointer-events:none;z-index:1}
 
