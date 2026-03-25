@@ -49,6 +49,7 @@ export default function App() {
   const wins     = profile.totalWins || 0;
   const unlocked = useMemo(() => new Set(profile.achievements || []), [profile.achievements]);
   const [lb, setLb]                 = useState(INIT_LB);
+  const [aiStats, setAiStats]       = useState([]);
   const [newAchs, setNewAchs]       = useState([]);
   const [popups, setPopups]         = useState([]);
   const [breakdown, setBreakdown]   = useState(null);
@@ -65,6 +66,33 @@ export default function App() {
   /* persist profile to localStorage whenever it changes */
   useEffect(() => { saveProfile(profile); }, [profile]);
   useEffect(() => { if (userKey) localStorage.setItem("ca_key", userKey); else localStorage.removeItem("ca_key"); }, [userKey]);
+
+  /* Fetch global leaderboard from Supabase on mount */
+  useEffect(() => {
+    fetchGlobalLeaderboard().then(data => {
+      if (!data || !data.players || data.players.length === 0) return;
+      // Merge Supabase players into lb, keeping local "You" entry on top if present
+      const supabaseLb = data.players.map(p => ({
+        name:   p.username,
+        pts:    p.total_score,
+        wins:   p.total_wins,
+        lvl:    p.player_level || 1,
+        apex:   p.defeated_apex || false,
+        streak: p.best_streak  || 0,
+      }));
+      setLb(prev => {
+        const you = prev.find(e => e.name === "You");
+        const merged = [
+          ...(you ? [you] : []),
+          ...supabaseLb.filter(e => e.name !== (you?.name)),
+        ].sort((a, b) => b.pts - a.pts).slice(0, 20);
+        return merged.length > 0 ? merged : prev;
+      });
+      if (data.aiStats && data.aiStats.length > 0) {
+        setAiStats(data.aiStats);
+      }
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ── helpers ── */
   const say = useCallback((text) => { setSpeech(text); setSpeechKey(k=>k+1); }, []);
@@ -108,9 +136,7 @@ export default function App() {
 
     setResult(res);
     setScreen("over");
-    // FIX 1: bd.total is now defined
     track("game_over", { result: res, model: model.name, tier: model.tier, moves: finalMoves, score: bd.total });
-    setGames(g=>g+1);
 
     // ── FIX 2: build updated profile synchronously so we can pass it to Supabase ──
     const updatedProfile = recordGame(profile, {
@@ -146,7 +172,7 @@ export default function App() {
     checkAchs({ wins: isWin?wins+1:wins, games:games+1, streak:newStreak, lossRun:newLoss,
       lastWin:isWin, lastSec:elapsed, lastMoves:finalMoves, lastTier:model.tierNum, usedBYOK });
 
-    // ── FIX 2: pass updatedProfile (not stale profile) to Supabase sync ──
+    // Sync to Supabase then refresh global leaderboard so ranks update immediately
     syncToNeon(updatedProfile, {
       result:    res,
       score:     bd.total,
@@ -154,6 +180,28 @@ export default function App() {
       modelName: model.name,
       moves:     finalMoves,
       seconds:   Math.round(elapsed),
+    }).then(() => {
+      // Refresh global leaderboard after the game is saved
+      fetchGlobalLeaderboard().then(data => {
+        if (!data || !data.players || data.players.length === 0) return;
+        const supabaseLb = data.players.map(p => ({
+          name:   p.username,
+          pts:    p.total_score,
+          wins:   p.total_wins,
+          lvl:    p.player_level || 1,
+          apex:   p.defeated_apex || false,
+          streak: p.best_streak  || 0,
+        }));
+        setLb(prev => {
+          const you = prev.find(e => e.name === updatedProfile.username);
+          const merged = [
+            ...(you ? [you] : []),
+            ...supabaseLb.filter(e => e.name !== updatedProfile.username),
+          ].sort((a, b) => b.pts - a.pts).slice(0, 20);
+          return merged.length > 0 ? merged : prev;
+        });
+        if (data.aiStats && data.aiStats.length > 0) setAiStats(data.aiStats);
+      });
     });
 
     setAiLoading(true);
@@ -312,6 +360,7 @@ export default function App() {
           lvl={lvl} xp={xp} streak={streak} totalPts={totalPts}
           userKey={userKey} onKeyChange={setUserKey}
           lb={lb} lbTab={lbTab} onLbTab={setLbTab}
+          aiStats={aiStats}
           unlocked={unlocked} wins={wins} games={games}
           myRankIdx={myRankIdx}
           onSelectModel={()=>setScreen("select")}
@@ -343,6 +392,7 @@ export default function App() {
           history={history} screen={screen} result={result} breakdown={breakdown}
           streak={streak} moveCount={moveCount}
           lb={lb} lbTab={lbTab} onLbTab={setLbTab}
+          aiStats={aiStats}
           lvl={lvl} xp={xp} totalPts={totalPts} myRankIdx={myRankIdx}
           onResign={resign}
           onPlayAgain={()=>startBattle(model)}
@@ -359,7 +409,7 @@ export default function App() {
 ═══════════════════════════════════════════════════ */
 
 /* ── HOME ── */
-function HomeScreen({ lvl, xp, streak, totalPts, userKey, onKeyChange, lb, lbTab, onLbTab, unlocked, wins, games, myRankIdx, onSelectModel }) {
+function HomeScreen({ lvl, xp, streak, totalPts, userKey, onKeyChange, lb, lbTab, onLbTab, aiStats, unlocked, wins, games, myRankIdx, onSelectModel }) {
   return (
     <div className="home-screen">
       <div className="home-hero">
@@ -397,7 +447,7 @@ function HomeScreen({ lvl, xp, streak, totalPts, userKey, onKeyChange, lb, lbTab
         {/* Tabs */}
         <Tabs value={lbTab} onChange={onLbTab} tabs={[{id:"players",label:"👥 Players"},{id:"ai",label:"🤖 AI Ranks"},{id:"ach",label:"🏆 Trophies"}]}/>
         {lbTab==="players" && <LBPanel lb={lb}/>}
-        {lbTab==="ai"      && <AIRanks/>}
+        {lbTab==="ai"      && <AIRanks aiStats={aiStats}/>}
         {lbTab==="ach"     && <AchGrid unlocked={unlocked}/>}
       </div>
     </div>
@@ -484,7 +534,7 @@ function IntroScreen({model:m, speech, aiLoading}) {
 }
 
 /* ── GAME ── */
-function GameScreen({model:m,speech,speechKey,aiLoading,chess,fen,shake,FILES,RANKS,GLYPHS,sqCls,getPiece,validSet,captureSet,onSq,thinking,history,screen,result,breakdown,streak,moveCount,lb,lbTab,onLbTab,lvl,xp,totalPts,myRankIdx,onResign,onPlayAgain,onHome,onSelectNew}) {
+function GameScreen({model:m,speech,speechKey,aiLoading,chess,fen,shake,FILES,RANKS,GLYPHS,sqCls,getPiece,validSet,captureSet,onSq,thinking,history,screen,result,breakdown,streak,moveCount,lb,lbTab,onLbTab,aiStats,lvl,xp,totalPts,myRankIdx,onResign,onPlayAgain,onHome,onSelectNew}) {
   return (
     <div className="game-screen" style={{"--c":m.color,"--g":m.glow,"--b":m.bg}}>
       {/* LEFT */}
@@ -506,7 +556,7 @@ function GameScreen({model:m,speech,speechKey,aiLoading,chess,fen,shake,FILES,RA
 
         <Tabs value={lbTab} onChange={onLbTab} tabs={[{id:"players",label:"👥"},{id:"ai",label:"🤖"},{id:"ach",label:"🏆"}]} small/>
         {lbTab==="players" && <LBPanel lb={lb} compact/>}
-        {lbTab==="ai"      && <AIRanks compact/>}
+        {lbTab==="ai"      && <AIRanks aiStats={aiStats} compact/>}
         {lbTab==="ach"     && <AchGrid unlocked={new Set()} compact/>}
       </aside>
 
@@ -755,25 +805,36 @@ function LBPanel({lb, compact}) {
   );
 }
 
-function AIRanks({compact}) {
+function AIRanks({aiStats, compact}) {
+  // If live Supabase data is available, use it; otherwise fall back to static gameData
+  const rows = (aiStats && aiStats.length > 0)
+    ? aiStats.map(s => {
+        const model = MODELS.find(m => m.id === s.model_id);
+        const wr = s.total_games > 0 ? Math.round((s.wins_against_humans / s.total_games) * 100) : 0;
+        return { id: s.model_id, name: s.model_name, color: model?.color || "#888",
+          avatar: model?.avatar || "🤖", provider: model?.provider || "", elo: model?.elo || 0,
+          wr, wins: s.wins_against_humans, totalGames: s.total_games, live: true };
+      }).sort((a,b)=>b.wins - a.wins)
+    : [...MODELS].reverse().map(m => {
+        const wr = Math.round(m.wins/(m.wins+m.losses+m.draws)*100);
+        return { id: m.id, name: m.name, color: m.color, avatar: m.avatar,
+          provider: m.provider, elo: m.elo, wr, wins: m.wins, totalGames: m.wins+m.losses+m.draws, live: false };
+      });
   return (
     <div className="lb">
-      {[...MODELS].reverse().map((m,i)=>{
-        const wr=Math.round(m.wins/(m.wins+m.losses+m.draws)*100);
-        return (
-          <div key={m.id} className={`lb-row ${compact?"lb-compact":""}`} style={{"--c":m.color}}>
-            <span className="lb-rank" style={{fontSize:"1rem"}}>{m.avatar}</span>
-            <div className="lb-body">
-              <div className="lb-name" style={{color:m.color}}>{m.name}</div>
-              {!compact&&<div className="lb-sub">{m.provider} · Elo {m.elo}</div>}
-            </div>
-            <div>
-              <div className="lb-pts" style={{color:m.color}}>{wr}%</div>
-              {!compact&&<div style={{fontSize:"0.58rem",color:"var(--t3)",textAlign:"right"}}>{m.wins.toLocaleString()}W</div>}
-            </div>
+      {rows.map((r)=>(
+        <div key={r.id} className={`lb-row ${compact?"lb-compact":""}`} style={{"--c":r.color}}>
+          <span className="lb-rank" style={{fontSize:"1rem"}}>{r.avatar}</span>
+          <div className="lb-body">
+            <div className="lb-name" style={{color:r.color}}>{r.name}{r.live&&<span title="Live data" style={{fontSize:"0.6rem",marginLeft:4,color:"#22c55e"}}>●</span>}</div>
+            {!compact&&<div className="lb-sub">{r.provider} · Elo {r.elo}</div>}
           </div>
-        );
-      })}
+          <div>
+            <div className="lb-pts" style={{color:r.color}}>{r.wr}%</div>
+            {!compact&&<div style={{fontSize:"0.58rem",color:"var(--t3)",textAlign:"right"}}>{r.wins.toLocaleString()}W</div>}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
