@@ -192,3 +192,15 @@ export function formatDate(ts) {
   const d = new Date(ts);
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
+
+// ─── Fetch profile from Supabase (cross-device sync) ─────────────────────────
+export async function fetchProfileFromDB(username) {
+  try {
+    const res = await fetch(`/api/profile-load?username=${encodeURIComponent(username)}`);
+    if (!res.ok) return null;
+    const json = await res.json();
+    return json.player || null; // { username, total_score, total_wins, … } | null
+  } catch {
+    return null;
+  }
+}

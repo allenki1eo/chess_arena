@@ -4,13 +4,22 @@ import { Chess } from "chess.js";
 import { getBestMove } from "./utils/stockfish.js";
 import { aiChat } from "./utils/aiChat.js";
 import { MODELS, PLAYER_LEVELS, getLevel, ACHIEVEMENTS, calcScore, INIT_LB } from "./utils/gameData.js";
-import { loadProfile, saveProfile, defaultProfile, recordGame, syncToNeon, fetchGlobalLeaderboard } from "./utils/playerDB.js";
+import { loadProfile, saveProfile, defaultProfile, recordGame, syncToNeon, fetchGlobalLeaderboard, fetchProfileFromDB } from "./utils/playerDB.js";
 import ProfilePage from "./components/ProfilePage.jsx";
 
 /* ─────────────────────────── CONSTANTS ───────────────────────────── */
 const FILES = ["a","b","c","d","e","f","g","h"];
 const RANKS = [8,7,6,5,4,3,2,1];
 const GLYPHS = { wK:"♔",wQ:"♕",wR:"♖",wB:"♗",wN:"♘",wP:"♙", bK:"♚",bQ:"♛",bR:"♜",bB:"♝",bN:"♞",bP:"♟" };
+
+/* Difficulty tiers per AI model */
+const DIFFICULTY_LEVELS = [
+  { id:"easy",        label:"Easy",        icon:"🟢", depthMod:0.35, skillMod:0.15, multMod:0.5  },
+  { id:"medium",      label:"Medium",      icon:"🟡", depthMod:0.60, skillMod:0.50, multMod:1.0  },
+  { id:"hard",        label:"Hard",        icon:"🟠", depthMod:0.80, skillMod:0.75, multMod:1.5  },
+  { id:"advanced",    label:"Advanced",    icon:"🔴", depthMod:1.00, skillMod:0.90, multMod:2.0  },
+  { id:"grandmaster", label:"Grandmaster", icon:"💀", depthMod:1.00, skillMod:1.00, multMod:3.0  },
+];
 
 /* ─────────────────────────── ROOT APP ────────────────────────────── */
 export default function App() {
@@ -56,12 +65,30 @@ export default function App() {
   const [moveCount, setMoveCount]   = useState(0);
   const [lbTab, setLbTab]           = useState("players"); // players | ai | ach
   const [usedBYOK, setUsedBYOK]    = useState(false);
+  const [onboardLoading, setOnboardLoading] = useState(false);
 
   const tRef     = useRef(false);  // thinking ref
   const startRef = useRef(null);
   const moveRef  = useRef(0);
 
   const lvl = useMemo(() => getLevel(xp), [xp]);
+
+  /* Captured pieces — recomputed every fen change */
+  const capturedPieces = useMemo(() => {
+    const byWhite = []; // black pieces captured by white (player)
+    const byBlack = []; // white pieces captured by black (AI)
+    const VALS = { q:9, r:5, b:3, n:3, p:1 };
+    chess.history({ verbose:true }).forEach(m => {
+      if (!m.captured) return;
+      if (m.color==="w") byWhite.push(m.captured);
+      else               byBlack.push(m.captured);
+    });
+    byWhite.sort((a,b)=>(VALS[b]||0)-(VALS[a]||0));
+    byBlack.sort((a,b)=>(VALS[b]||0)-(VALS[a]||0));
+    const whiteAdv = byWhite.reduce((s,p)=>s+(VALS[p]||0),0)
+                   - byBlack.reduce((s,p)=>s+(VALS[p]||0),0);
+    return { byWhite, byBlack, whiteAdv };
+  }, [fen, chess]);
 
   /* persist profile to localStorage whenever it changes */
   useEffect(() => { saveProfile(profile); }, [profile]);
@@ -305,10 +332,31 @@ export default function App() {
   const myRankIdx = lb.findIndex(e=>e.name==="You");
 
   /* ─── RENDER ─── */
-  const handleOnboard = () => {
+  const handleOnboard = async () => {
     const name = onboardName.trim().replace(/[^a-zA-Z0-9_]/g,"").slice(0,20) || "Player";
-    const fresh = defaultProfile(name);
-    setProfile(fresh);
+    setOnboardLoading(true);
+    try {
+      const dbPlayer = await fetchProfileFromDB(name);
+      if (dbPlayer && (dbPlayer.total_games||0) > 0) {
+        // Restore core progression from Supabase
+        setProfile({
+          ...defaultProfile(name),
+          totalScore:   dbPlayer.total_score   || 0,
+          totalWins:    dbPlayer.total_wins    || 0,
+          totalLosses:  dbPlayer.total_losses  || 0,
+          totalDraws:   dbPlayer.total_draws   || 0,
+          totalGames:   dbPlayer.total_games   || 0,
+          xp:           dbPlayer.total_score   || 0,
+          bestStreak:   dbPlayer.best_streak   || 0,
+          defeatedApex: dbPlayer.defeated_apex || false,
+        });
+      } else {
+        setProfile(defaultProfile(name));
+      }
+    } catch {
+      setProfile(defaultProfile(name));
+    }
+    setOnboardLoading(false);
     setScreen("home");
   };
 
@@ -351,6 +399,7 @@ export default function App() {
           name={onboardName}
           onChange={setOnboardName}
           onStart={handleOnboard}
+          loading={onboardLoading}
         />
       )}
 
@@ -394,6 +443,7 @@ export default function App() {
           lb={lb} lbTab={lbTab} onLbTab={setLbTab}
           aiStats={aiStats}
           lvl={lvl} xp={xp} totalPts={totalPts} myRankIdx={myRankIdx}
+          capturedPieces={capturedPieces}
           onResign={resign}
           onPlayAgain={()=>startBattle(model)}
           onHome={()=>setScreen("home")}
@@ -460,6 +510,19 @@ function HeroStat({icon,val,label}) {
 /* ── SELECT ── */
 function SelectScreen({ userKey, onKeyChange, onStart, onBack }) {
   const [hov, setHov] = useState(null);
+  const [diff, setDiff] = useState("medium");
+
+  const handlePlay = (m) => {
+    const d = DIFFICULTY_LEVELS.find(x => x.id === diff);
+    onStart({
+      ...m,
+      depth:      Math.max(1, Math.round(m.depth * d.depthMod)),
+      skill:      Math.max(1, Math.round(m.skill * d.skillMod)),
+      mult:       parseFloat((m.mult * d.multMod).toFixed(1)),
+      difficulty: d,
+    });
+  };
+
   return (
     <div className="select-screen">
       <div className="sel-header">
@@ -467,11 +530,25 @@ function SelectScreen({ userKey, onKeyChange, onStart, onBack }) {
         <h2 className="sel-title">Choose Your Opponent</h2>
         <BYOKPanel userKey={userKey} onChange={onKeyChange} compact/>
       </div>
+      {/* Difficulty Picker */}
+      <div className="diff-bar">
+        <span className="diff-label">Difficulty</span>
+        <div className="diff-btns">
+          {DIFFICULTY_LEVELS.map(d=>(
+            <button key={d.id}
+              className={`diff-btn ${diff===d.id?"diff-on":""}`}
+              onClick={()=>setDiff(d.id)}
+              title={`${d.label} · ${d.multMod}× score modifier`}>
+              {d.icon} {d.label}
+            </button>
+          ))}
+        </div>
+      </div>
       <div className="model-grid">
         {MODELS.map((m,i)=>(
-          <ModelCard key={m.id} model={m} hovered={hov===m.id}
+          <ModelCard key={m.id} model={m} hovered={hov===m.id} diff={diff}
             onHover={()=>setHov(m.id)} onLeave={()=>setHov(null)}
-            onPlay={()=>onStart(m)}
+            onPlay={()=>handlePlay(m)}
             style={{animationDelay:`${i*0.06}s`}}
           />
         ))}
@@ -481,13 +558,21 @@ function SelectScreen({ userKey, onKeyChange, onStart, onBack }) {
 }
 
 /* ── MODEL CARD ── */
-function ModelCard({model:m, hovered, onHover, onLeave, onPlay, style}) {
+function ModelCard({model:m, hovered, onHover, onLeave, onPlay, style, diff}) {
   const wr = Math.round(m.wins/(m.wins+m.losses+m.draws)*100);
+  const d  = DIFFICULTY_LEVELS.find(x=>x.id===(diff||"medium")) || DIFFICULTY_LEVELS[1];
+  const effMult = parseFloat((m.mult * d.multMod).toFixed(1));
+  const diffColor = d.id==="grandmaster"?"#ef4444":d.id==="advanced"?"#fb923c":d.id==="hard"?"#f59e0b":d.id==="medium"?"#22c55e":"#38bdf8";
   return (
     <div className="mcard" onMouseEnter={onHover} onMouseLeave={onLeave}
       style={{...style,"--c":m.color,"--g":m.glow,"--b":m.bg, animationName:"cardIn"}}
       data-active={hovered}>
-      <div className="mc-tier" style={{color:m.color}}>{m.tier.toUpperCase()} · {m.mult}×</div>
+      <div className="mc-tier-row">
+        <span className="mc-tier" style={{color:m.color}}>{m.tier.toUpperCase()}</span>
+        <span className="mc-diff-badge" style={{background:`${diffColor}22`,color:diffColor,border:`1px solid ${diffColor}55`}}>
+          {d.icon} {d.label} · {effMult}×
+        </span>
+      </div>
       <div className="mc-top">
         <span className="mc-avatar">{m.avatar}</span>
         <div>
@@ -506,7 +591,7 @@ function ModelCard({model:m, hovered, onHover, onLeave, onPlay, style}) {
       </div>
       <div className="mc-bar"><div style={{width:`${wr}%`}}/></div>
       <button className="mc-btn" onClick={onPlay}>
-        Challenge {m.name} <span>{m.mult}×</span>
+        Challenge {m.name} <span style={{color:diffColor}}>{effMult}×</span>
       </button>
     </div>
   );
@@ -534,7 +619,7 @@ function IntroScreen({model:m, speech, aiLoading}) {
 }
 
 /* ── GAME ── */
-function GameScreen({model:m,speech,speechKey,aiLoading,chess,fen,shake,FILES,RANKS,GLYPHS,sqCls,getPiece,validSet,captureSet,onSq,thinking,history,screen,result,breakdown,streak,moveCount,lb,lbTab,onLbTab,aiStats,lvl,xp,totalPts,myRankIdx,onResign,onPlayAgain,onHome,onSelectNew}) {
+function GameScreen({model:m,speech,speechKey,aiLoading,chess,fen,shake,FILES,RANKS,GLYPHS,sqCls,getPiece,validSet,captureSet,onSq,thinking,history,screen,result,breakdown,streak,moveCount,lb,lbTab,onLbTab,aiStats,lvl,xp,totalPts,myRankIdx,capturedPieces,onResign,onPlayAgain,onHome,onSelectNew}) {
   return (
     <div className="game-screen" style={{"--c":m.color,"--g":m.glow,"--b":m.bg}}>
       {/* LEFT */}
@@ -598,30 +683,44 @@ function GameScreen({model:m,speech,speechKey,aiLoading,chess,fen,shake,FILES,RA
           )}
         </div>
 
-        {/* BOARD */}
-        <div className={`board-wrap ${shake?"board-shake":""}`}>
-          <div className="board-ranks">
-            {RANKS.map(r=><div key={r} className="coord">{r}</div>)}
-          </div>
-          <div>
-            <div className="board" style={{opacity:screen==="over"?0.6:1}}>
-              {RANKS.map(rank=>FILES.map(file=>{
-                const sq=`${file}${rank}`;
-                const p=getPiece(file,rank);
-                const pk=p?`${p.color==="w"?"w":"b"}${p.type.toUpperCase()}`:null;
-                const isDot=validSet.has(sq)&&!captureSet.has(sq);
-                const isCap=captureSet.has(sq);
-                return (
-                  <div key={sq} className={sqCls(file,rank)} onClick={()=>onSq(sq)}>
-                    {pk&&<span className={`piece ${p.color==="b"?"pb":""}`}>{GLYPHS[pk]}</span>}
-                    {isDot&&<span className="dot"/>}
-                    {isCap&&<span className="ring"/>}
-                  </div>
-                );
-              }))}
+        {/* BOARD + captured pieces */}
+        <div className="board-area">
+          {/* AI took (white pieces captured by black) — near top/AI side */}
+          <CapturedBar
+            pieces={capturedPieces?.byBlack||[]}
+            pieceColor="w"
+            advantage={capturedPieces?.whiteAdv<0 ? -capturedPieces.whiteAdv : 0}
+          />
+          <div className={`board-wrap ${shake?"board-shake":""}`}>
+            <div className="board-ranks">
+              {RANKS.map(r=><div key={r} className="coord">{r}</div>)}
             </div>
-            <div className="board-files">{FILES.map(f=><div key={f} className="coord">{f}</div>)}</div>
+            <div>
+              <div className="board" style={{opacity:screen==="over"?0.6:1}}>
+                {RANKS.map(rank=>FILES.map(file=>{
+                  const sq=`${file}${rank}`;
+                  const p=getPiece(file,rank);
+                  const pk=p?`${p.color==="w"?"w":"b"}${p.type.toUpperCase()}`:null;
+                  const isDot=validSet.has(sq)&&!captureSet.has(sq);
+                  const isCap=captureSet.has(sq);
+                  return (
+                    <div key={sq} className={sqCls(file,rank)} onClick={()=>onSq(sq)}>
+                      {pk&&<span className={`piece ${p.color==="b"?"pb":""}`}>{GLYPHS[pk]}</span>}
+                      {isDot&&<span className="dot"/>}
+                      {isCap&&<span className="ring"/>}
+                    </div>
+                  );
+                }))}
+              </div>
+              <div className="board-files">{FILES.map(f=><div key={f} className="coord">{f}</div>)}</div>
+            </div>
           </div>
+          {/* You took (black pieces captured by white) — near bottom/player side */}
+          <CapturedBar
+            pieces={capturedPieces?.byWhite||[]}
+            pieceColor="b"
+            advantage={capturedPieces?.whiteAdv>0 ? capturedPieces.whiteAdv : 0}
+          />
         </div>
 
         {/* bottom bar: player */}
@@ -865,6 +964,30 @@ function StatRow({icon,label,val}) {
   );
 }
 
+/* ── Captured pieces bar ── */
+const CAP_G_B = { q:"♛",r:"♜",b:"♝",n:"♞",p:"♟" };
+const CAP_G_W = { q:"♕",r:"♖",b:"♗",n:"♘",p:"♙" };
+function CapturedBar({ pieces, pieceColor, advantage }) {
+  const g  = pieceColor==="b" ? CAP_G_B : CAP_G_W;
+  const lbl = pieceColor==="b" ? "You" : "AI";
+  return (
+    <div className="cap-bar">
+      <span className="cap-lbl">{lbl}</span>
+      <span className="cap-pieces">
+        {pieces.length===0
+          ? <span className="cap-none">—</span>
+          : pieces.map((p,i)=>(
+              <span key={i} className={`cap-glyph ${pieceColor==="b"?"cgb":"cgw"}`}>
+                {g[p]||"?"}
+              </span>
+            ))
+        }
+      </span>
+      {advantage>0 && <span className="cap-adv">+{advantage}</span>}
+    </div>
+  );
+}
+
 function Dots({color, inline}) {
   return (
     <span className={`dots ${inline?"dots-i":""}`}>
@@ -912,7 +1035,7 @@ function Particles() {
 }
 
 /* ── Onboard ── */
-function OnboardScreen({ name, onChange, onStart }) {
+function OnboardScreen({ name, onChange, onStart, loading }) {
   return (
     <div className="onboard">
       <div className="ob-card">
@@ -926,13 +1049,15 @@ function OnboardScreen({ name, onChange, onStart }) {
             placeholder="e.g. GrandMagnus99"
             value={name}
             onChange={e=>onChange(e.target.value.replace(/[^a-zA-Z0-9_]/g,"").slice(0,20))}
-            onKeyDown={e=>e.key==="Enter"&&name.trim()&&onStart()}
+            onKeyDown={e=>e.key==="Enter"&&name.trim()&&!loading&&onStart()}
             autoFocus maxLength={20}
+            disabled={loading}
           />
           <div className="ob-hint">Letters, numbers, underscores only · Max 20 chars</div>
+          <div className="ob-sync-note">☁️ Used this name before? Your progress will be restored from the cloud.</div>
         </div>
-        <button className="btn-play ob-start" onClick={onStart} disabled={!name.trim()}>
-          ⚔ Enter the Arena
+        <button className="btn-play ob-start" onClick={onStart} disabled={!name.trim()||loading}>
+          {loading ? <><span className="ob-spinner"/>&nbsp;Restoring profile…</> : "⚔ Enter the Arena"}
         </button>
         <div className="ob-features">
           <span>🤖 6 AI models</span>
@@ -1319,6 +1444,28 @@ a{color:inherit}
 .ml-w{font-family:var(--fmono);font-size:.68rem;color:var(--t1)}
 .ml-b{font-family:var(--fmono);font-size:.68rem;color:var(--t3)}
 
+/* CAPTURED BAR */
+.board-area{display:flex;flex-direction:column;align-items:center;gap:4px}
+.cap-bar{width:100%;max-width:520px;display:flex;align-items:center;gap:6px;min-height:20px;padding:2px 6px;border-radius:4px}
+.cap-lbl{font-family:var(--fmono);font-size:.5rem;letter-spacing:.1em;color:var(--t3);text-transform:uppercase;width:26px;flex-shrink:0}
+.cap-pieces{display:flex;flex-wrap:wrap;gap:0px;flex:1;align-items:center;line-height:1}
+.cap-none{font-size:.5rem;color:var(--t3);font-style:italic}
+.cap-glyph{font-size:.95rem;line-height:1;margin-right:1px}
+.cgb{color:#1c1c2e;-webkit-text-stroke:1px rgba(80,200,255,.35);filter:drop-shadow(0 1px 1px rgba(0,0,0,.6))}
+.cgw{color:#fdf0d5;-webkit-text-stroke:1px rgba(120,60,0,.4);filter:drop-shadow(0 1px 1px rgba(0,0,0,.7))}
+.cap-adv{font-family:var(--fdis);font-size:.72rem;color:var(--gold);margin-left:6px;flex-shrink:0}
+
+/* DIFFICULTY PICKER */
+.diff-bar{display:flex;align-items:center;gap:12px;padding:10px 0;flex-wrap:wrap}
+.diff-label{font-family:var(--fmono);font-size:.6rem;letter-spacing:.18em;color:var(--t3);text-transform:uppercase;flex-shrink:0}
+.diff-btns{display:flex;gap:6px;flex-wrap:wrap}
+.diff-btn{font-family:var(--fraj);font-weight:600;font-size:.72rem;padding:7px 14px;border-radius:20px;
+  border:1px solid rgba(255,255,255,.1);background:transparent;color:var(--t2);cursor:pointer;transition:all .18s}
+.diff-btn:hover{color:var(--t1);border-color:rgba(255,255,255,.25)}
+.diff-on{background:var(--bg3);color:var(--gold);border-color:rgba(245,197,66,.4);box-shadow:0 0 12px rgba(245,197,66,.1)}
+.mc-tier-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.mc-diff-badge{font-family:var(--fmono);font-size:.58rem;padding:3px 8px;border-radius:10px;letter-spacing:.04em}
+
 /* STAT ROW */
 .stat-row{display:flex;justify-content:space-between;align-items:center;padding:7px 4px;
   border-bottom:1px solid rgba(255,255,255,.04);font-size:.76rem;color:var(--t2)}
@@ -1372,7 +1519,8 @@ a{color:inherit}
 /* Large phone landscape / small tablet (≤900px) */
 @media(max-width:900px){
   .home-screen{grid-template-columns:1fr}
-  .home-side{display:none}
+  /* Show side panel stacked below hero on tablets/phones */
+  .home-side{display:flex;border-left:none;border-top:1px solid rgba(255,255,255,.06);max-height:none;padding:20px 16px}
   .game-screen{grid-template-columns:1fr}
   .g-aside,.g-aside-r{display:none}
   /* Board: 52px squares */
@@ -1384,6 +1532,8 @@ a{color:inherit}
   .model-grid{grid-template-columns:repeat(2,1fr)}
   .select-screen{padding:20px 20px}
   .hero-title{font-size:clamp(2.8rem,8vw,5rem)}
+  .diff-btns{gap:4px}
+  .diff-btn{font-size:.65rem;padding:6px 10px}
 }
 
 /* Phone portrait (≤600px) */
@@ -1524,8 +1674,12 @@ a{color:inherit}
   transition:border-color .2s;text-align:center;letter-spacing:.05em}
 .ob-input:focus{border-color:var(--gold)}
 .ob-hint{font-size:.65rem;color:var(--t3);margin-top:6px;text-align:center}
-.ob-start{width:100%;justify-content:center;font-size:.9rem;padding:16px}
+.ob-sync-note{font-size:.65rem;color:var(--t2);margin-top:10px;text-align:center;padding:6px 12px;
+  background:rgba(245,197,66,.06);border:1px solid rgba(245,197,66,.15);border-radius:6px;line-height:1.5}
+.ob-start{width:100%;justify-content:center;font-size:.9rem;padding:16px;display:flex;align-items:center;gap:8px}
 .ob-start:disabled{opacity:.4;cursor:not-allowed;transform:none!important;box-shadow:none!important}
+.ob-spinner{width:16px;height:16px;border:2px solid rgba(0,0,0,.2);border-top-color:#08090f;
+  border-radius:50%;animation:spin .7s linear infinite;flex-shrink:0}
 .ob-features{display:flex;flex-wrap:wrap;justify-content:center;gap:10px;margin-top:20px}
 .ob-features span{font-size:.72rem;color:var(--t3);background:var(--bg2);
   padding:4px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.06)}
