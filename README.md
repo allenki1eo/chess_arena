@@ -92,8 +92,8 @@ Each opponent is a real, named LLM from OpenRouter's free tier. They taunt you, 
 ### 1. Clone & Install
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/chess-arena.git
-cd chess-arena
+git clone https://github.com/allenki1eo/chess_arena.git
+cd chess_arena
 npm install
 ```
 
@@ -184,7 +184,7 @@ vercel deploy --prod # Deploy to production
 ## 📁 Project Structure
 
 ```
-chess-arena/
+chess_arena/
 ├── vercel/
 │   └── functions/
 │       ├── ai-chat.js            # Secure OpenRouter proxy (BYOK + DeepSeek <think> strip)
@@ -376,6 +376,6 @@ Feel free to fork, self-host, add models, and make it your own. If you build som
 
 **Built with ♟ and too much caffeine**
 
-[Live Demo](https://your-site.vercel.app) · [Report a Bug](https://github.com/YOUR_USERNAME/chess-arena/issues) · [Request a Feature](https://github.com/YOUR_USERNAME/chess-arena/issues)
+[Live Demo](https://chess-arena-six.vercel.app/) · [Report a Bug](https://github.com/allenki1eo/chess_arena/issues) · [Request a Feature](https://github.com/allenki1eo/chess_arena/issues)
 
 </div>
